@@ -1,11 +1,16 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 )
 
@@ -32,11 +37,8 @@ func processes() []os.FileInfo {
 	return ps
 }
 
-func main() {
-	ps := processes()
-	// key is namespace number, value is list of process pids. All stored as string type.
+func namespaces(ps []os.FileInfo) map[string][]string {
 	netns := make(map[string][]string)
-
 	r := regexp.MustCompile("^net:\\[([0-9]+)\\]$")
 
 	for _, f := range ps {
@@ -51,12 +53,52 @@ func main() {
 
 		netns[nsNum] = append(netns[nsNum], f.Name())
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 0, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(w, "NS NUMBER \t PIDS")
+	return netns
+}
 
-	for ns, pids := range netns {
-		pidsJoined := strings.Join(pids, ",")
-		fmt.Fprintln(w, ns, "\t", pidsJoined)
+func main() {
+	runtime.LockOSThread()
+	ps := processes()
+	// key is namespace number, value is list of process pids. All stored as string type.
+	netns := namespaces(ps)
+
+	// If we run external command:
+	joinPtr := flag.String("j", "", "Join namespace number")
+	flag.Parse()
+
+	if *joinPtr == "" {
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 0, ' ', tabwriter.AlignRight)
+		fmt.Fprintln(w, "NS NUMBER \t PIDS")
+
+		//TODO: sort by namespace number, otherwise it's random from hashmap
+		for ns, pids := range netns {
+			pidsJoined := strings.Join(pids, ",")
+			fmt.Fprintln(w, ns, "\t", pidsJoined)
+		}
+		w.Flush()
+		os.Exit(0)
 	}
-	w.Flush()
+
+	//TODO: is there a way to get fd without going to proc?
+	//TODO: check that PID exists
+	pid := netns[*joinPtr][0]
+
+	fd, err := syscall.Open(filepath.Join("/proc", pid, "ns/net"), syscall.O_RDONLY, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+	exitCode, _, errno := syscall.RawSyscall(308, uintptr(fd), 0, 0) // 308 is setns
+	if exitCode != 0 {
+		log.Fatal(errno)
+	}
+
+	cmd := exec.Command(flag.Args()[0], flag.Args()[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		log.Fatal(err)
+	}
+
 }

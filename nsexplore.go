@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -70,9 +71,15 @@ func main() {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 0, ' ', tabwriter.AlignRight)
 		fmt.Fprintln(w, "NS NUMBER \t PIDS")
 
-		//TODO: sort by namespace number, otherwise it's random from hashmap
-		for ns, pids := range netns {
-			pidsJoined := strings.Join(pids, ",")
+		// Sort by namespace
+		nsList := []string{}
+		for k, _ := range netns {
+			nsList = append(nsList, k)
+		}
+		sort.Strings(nsList)
+
+		for _, ns := range nsList {
+			pidsJoined := strings.Join(netns[ns], ",")
 			fmt.Fprintln(w, ns, "\t", pidsJoined)
 		}
 		w.Flush()

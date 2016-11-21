@@ -80,8 +80,11 @@ func main() {
 	}
 
 	//TODO: is there a way to get fd without going to proc?
-	//TODO: check that PID exists
-	pid := netns[*joinPtr][0]
+	pids := netns[*joinPtr]
+	if len(pids) == 0 {
+		log.Fatalf("Namespace %s not found.", *joinPtr)
+	}
+	pid := pids[0]
 
 	fd, err := syscall.Open(filepath.Join("/proc", pid, "ns/net"), syscall.O_RDONLY, 0644)
 	if err != nil {

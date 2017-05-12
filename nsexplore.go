@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -37,7 +39,7 @@ func processes() []os.FileInfo {
 		log.Fatal(err)
 	}
 
-	r := regexp.MustCompile("^[0-9]+$")
+	r := regexp.MustCompile(`^\d+$`)
 
 	for _, f := range files {
 		if f.IsDir() && r.MatchString(f.Name()) {
@@ -47,9 +49,8 @@ func processes() []os.FileInfo {
 	return ps
 }
 
-func namespaces(ps []os.FileInfo) NsMap {
-	netns := NsMap{Map: make(map[string]*NsData)}
-	r := regexp.MustCompile("^net:\\[([0-9]+)\\]$")
+func AddFromPids(ps []os.FileInfo, netns NsMap) {
+	r := regexp.MustCompile(`^net:\[([0-9]+)\]$`)
 
 	for _, f := range ps {
 		fpath := filepath.Join("/proc", f.Name(), "ns/net")
@@ -67,12 +68,45 @@ func namespaces(ps []os.FileInfo) NsMap {
 
 		netns.Map[nsNum].pids = append(netns.Map[nsNum].pids, f.Name())
 	}
-	return netns
 }
 
-func print(netns NsMap) {
+func AddFromMount(netns NsMap) {
+	// 55 54 0:3 net:[4026532152] /run/netns/myns rw shared:35 - nsfs nsfs rw
+	//                            ^^ parsed[4] ^^
+	r := regexp.MustCompile(` - nsfs`)
+	var stat syscall.Stat_t
+
+	f, err := os.Open("/proc/self/mountinfo")
+	defer f.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		if !r.MatchString(s.Text()) {
+			continue // this is not nsfs, we don't need it
+		}
+		parsed := strings.Fields(s.Text())
+		if len(parsed) < 5 {
+			log.Printf("Err: Could not parse mountinfo line: '%s'\n", s.Text())
+			continue
+		}
+		fpath := parsed[4]
+
+		if err := syscall.Stat(fpath, &stat); err != nil {
+			log.Printf("Err: Could not stat ns file: '%s'\n", fpath)
+			continue
+		}
+		nsNum := strconv.FormatUint(stat.Ino, 10)
+		if _, ok := netns.Map[nsNum]; !ok {
+			netns.Map[nsNum] = &NsData{file: fpath}
+		} // otherwise we already have it under one of pids
+	}
+}
+
+func PrintNs(netns NsMap) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 0, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(w, "NS NUMBER \t PIDS")
+	fmt.Fprintln(w, "NS NUMBER \t FILE \t PIDS")
 
 	// Sort by namespace
 	nsList := []string{}
@@ -83,22 +117,22 @@ func print(netns NsMap) {
 
 	for _, ns := range nsList {
 		pidsJoined := strings.Join(netns.Map[ns].pids, ",")
-		fmt.Fprintln(w, ns, "\t", pidsJoined)
+		fmt.Fprintln(w, ns, "\t", netns.Map[ns].file, "\t", pidsJoined)
 	}
 	w.Flush()
 }
 
-func joinNs(netns NsMap, target string) {
-	pids := netns.Map[target].pids
-	if len(pids) == 0 {
-		log.Fatalf("Namespace %s not found.", target)
+func JoinNs(netns NsMap, target string) {
+	ns, ok := netns.Map[target]
+	if !ok {
+		log.Fatalf("Namespace %s not found\n", target)
 	}
-	pid := pids[0]
 
-	fd, err := syscall.Open(filepath.Join("/proc", pid, "ns/net"), syscall.O_RDONLY, 0644)
+	fd, err := syscall.Open(ns.file, syscall.O_RDONLY, 0644)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer syscall.Close(fd)
 	exitCode, _, errno := syscall.RawSyscall(308, uintptr(fd), 0, 0) // 308 is setns
 	if exitCode != 0 {
 		log.Fatal(errno)
@@ -118,16 +152,17 @@ func main() {
 	runtime.LockOSThread()
 	ps := processes()
 
-	netns := namespaces(ps)
+	netns := NsMap{Map: make(map[string]*NsData)}
+	AddFromPids(ps, netns)
+	AddFromMount(netns)
 
 	// If we run external command:
 	joinPtr := flag.String("j", "", "Join namespace number")
 	flag.Parse()
 
 	if *joinPtr == "" {
-		print(netns)
+		PrintNs(netns)
 	} else {
-		joinNs(netns, *joinPtr)
+		JoinNs(netns, *joinPtr)
 	}
-
 }

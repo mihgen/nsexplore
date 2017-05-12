@@ -1,21 +1,27 @@
-## Explore and enter Linux namespaces
-Only network namespaces are supported at the moment.
+## Explore and enter Linux nerwork namespaces
 You can see ALL network namespaces and process pids associated with each.
-It is different from "ip netns list" by ability to see unnamed namespaces.
+It is different from "ip netns list" by ability to see unnamed namespaces, i.e. those which are not bind mount to /var/run/netns directory. See 'man namespaces' for more details.
 
 #### Example usage
-Make sure you are root before running this utility.
+Make sure that you have read access to all /proc/\<pid\>/ directories. Otherwise information will not be full.
 
 ```bash
 go build nsexplore.go
+# or download binary from github:
+wget https://github.com/mihgen/nsexplore/releases/download/v0.2/nsexplore
+chmod +x nsexplore
+```
 
+```bash
 # List all network namespaces, and pids associated.
 ./nsexplore
 ```
+
 Example output:
 ```bash
- NS NUMBER  PIDS
-4026531957  8053,8077,10776,11790
+ NS NUMBER               FILE  PIDS
+4026531957  /proc/1272/ns/net  1272,1330,7950,8489,9387,9405
+4026532152    /run/netns/myns
 ```
 
 To see what those pids are:

@@ -1,4 +1,4 @@
-## Explore and enter Linux nerwork namespaces
+## Explore and enter Linux network namespaces
 You can see ALL network namespaces and process pids associated with each.
 It is different from "ip netns list" by ability to see unnamed namespaces, i.e. those which are not bind mount to /var/run/netns directory. See 'man namespaces' for more details.
 
@@ -20,7 +20,7 @@ chmod +x nsexplore
 Example output:
 ```bash
  NS NUMBER               FILE  PIDS
-4026531957  /proc/1272/ns/net  1272,1330,7950,8489,9387,9405
+4026531957  /proc/1272/ns/net  8053,8077,10776,11790
 4026532152    /run/netns/myns
 ```
 
@@ -32,7 +32,7 @@ ps -fp 8053,8077,10776,11790
 
 Enter network namespace by number and run "ip addr":
 ```bash
-./nsexplore -j 4026531957 ip addr
+./nsexplore -j 4026532152 ip addr
 ```
 
 #### Docker containers

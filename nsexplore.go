@@ -15,6 +15,15 @@ import (
 	"text/tabwriter"
 )
 
+type NsData struct {
+	pids []string
+	file string
+}
+
+type NsMap struct {
+	Map map[string]*NsData
+}
+
 func processes() []os.FileInfo {
 	var ps []os.FileInfo
 
@@ -38,12 +47,13 @@ func processes() []os.FileInfo {
 	return ps
 }
 
-func namespaces(ps []os.FileInfo) map[string][]string {
-	netns := make(map[string][]string)
+func namespaces(ps []os.FileInfo) NsMap {
+	netns := NsMap{Map: make(map[string]*NsData)}
 	r := regexp.MustCompile("^net:\\[([0-9]+)\\]$")
 
 	for _, f := range ps {
-		nsName, err := os.Readlink("/proc/" + f.Name() + "/ns/net")
+		fpath := filepath.Join("/proc", f.Name(), "ns/net")
+		nsName, err := os.Readlink(fpath)
 		if err != nil {
 			// Permission denied if you are not root: you can't see /proc/<pid>/
 			continue
@@ -51,45 +61,37 @@ func namespaces(ps []os.FileInfo) map[string][]string {
 
 		// we are not converting string to a number for conveniency. nsNum is a string type.
 		nsNum := r.FindStringSubmatch(nsName)[1]
+		if _, ok := netns.Map[nsNum]; !ok {
+			netns.Map[nsNum] = &NsData{file: fpath}
+		}
 
-		netns[nsNum] = append(netns[nsNum], f.Name())
+		netns.Map[nsNum].pids = append(netns.Map[nsNum].pids, f.Name())
 	}
 	return netns
 }
 
-func main() {
-	runtime.LockOSThread()
-	ps := processes()
-	// key is namespace number, value is list of process pids. All stored as string type.
-	netns := namespaces(ps)
+func print(netns NsMap) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 0, ' ', tabwriter.AlignRight)
+	fmt.Fprintln(w, "NS NUMBER \t PIDS")
 
-	// If we run external command:
-	joinPtr := flag.String("j", "", "Join namespace number")
-	flag.Parse()
-
-	if *joinPtr == "" {
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 0, ' ', tabwriter.AlignRight)
-		fmt.Fprintln(w, "NS NUMBER \t PIDS")
-
-		// Sort by namespace
-		nsList := []string{}
-		for k, _ := range netns {
-			nsList = append(nsList, k)
-		}
-		sort.Strings(nsList)
-
-		for _, ns := range nsList {
-			pidsJoined := strings.Join(netns[ns], ",")
-			fmt.Fprintln(w, ns, "\t", pidsJoined)
-		}
-		w.Flush()
-		os.Exit(0)
+	// Sort by namespace
+	nsList := []string{}
+	for k, _ := range netns.Map {
+		nsList = append(nsList, k)
 	}
+	sort.Strings(nsList)
 
-	//TODO: is there a way to get fd without going to proc?
-	pids := netns[*joinPtr]
+	for _, ns := range nsList {
+		pidsJoined := strings.Join(netns.Map[ns].pids, ",")
+		fmt.Fprintln(w, ns, "\t", pidsJoined)
+	}
+	w.Flush()
+}
+
+func joinNs(netns NsMap, target string) {
+	pids := netns.Map[target].pids
 	if len(pids) == 0 {
-		log.Fatalf("Namespace %s not found.", *joinPtr)
+		log.Fatalf("Namespace %s not found.", target)
 	}
 	pid := pids[0]
 
@@ -109,6 +111,23 @@ func main() {
 
 	if err := cmd.Run(); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func main() {
+	runtime.LockOSThread()
+	ps := processes()
+
+	netns := namespaces(ps)
+
+	// If we run external command:
+	joinPtr := flag.String("j", "", "Join namespace number")
+	flag.Parse()
+
+	if *joinPtr == "" {
+		print(netns)
+	} else {
+		joinNs(netns, *joinPtr)
 	}
 
 }

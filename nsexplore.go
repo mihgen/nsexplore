@@ -100,7 +100,10 @@ func AddFromMount(netns NsMap) {
 		nsNum := strconv.FormatUint(stat.Ino, 10)
 		if _, ok := netns.Map[nsNum]; !ok {
 			netns.Map[nsNum] = &NsData{file: fpath}
-		} // otherwise we already have it under one of pids
+		} else {
+			// let's use this file instead of /proc/<pid>/...
+			netns.Map[nsNum].file = fpath
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -53,20 +54,41 @@ func AddFromPids(ps []os.FileInfo, netns NsMap) {
 	r := regexp.MustCompile(`^net:\[([0-9]+)\]$`)
 
 	for _, f := range ps {
-		fpath := filepath.Join("/proc", f.Name(), "ns/net")
-		nsName, err := os.Readlink(fpath)
+		// if thread is created with CLONE_NEWNET option, it will live in new network namespace
+		pdir, err := os.Open(filepath.Join("/proc", f.Name(), "task"))
 		if err != nil {
-			// Permission denied if you are not root: you can't see /proc/<pid>/
+			// this process may not exist by this time, skipping
+			continue
+		}
+		tasks, err := pdir.Readdirnames(-1)
+		if err != nil {
+			// skip this process if we can't get its tasks
 			continue
 		}
 
-		// we are not converting string to a number for conveniency. nsNum is a string type.
-		nsNum := r.FindStringSubmatch(nsName)[1]
-		if _, ok := netns.Map[nsNum]; !ok {
-			netns.Map[nsNum] = &NsData{file: fpath}
-		}
+		for _, t := range tasks {
+			var fpath string
+			if t == f.Name() {
+				// use shorter path for main thread reference
+				fpath = filepath.Join("/proc", f.Name(), "ns/net")
+			} else {
+				fpath = filepath.Join("/proc", f.Name(), "task", t, "ns/net")
+			}
+			nsName, err := os.Readlink(fpath)
+			if err != nil {
+				// Permission denied if you are not root: you can't see /proc/<pid>/
+				// or there is no such process exist by now
+				continue
+			}
 
-		netns.Map[nsNum].pids = append(netns.Map[nsNum].pids, f.Name())
+			// we are not converting string to a number for conveniency. nsNum is a string type.
+			nsNum := r.FindStringSubmatch(nsName)[1]
+			if _, ok := netns.Map[nsNum]; !ok {
+				netns.Map[nsNum] = &NsData{file: fpath}
+			}
+
+			netns.Map[nsNum].pids = append(netns.Map[nsNum].pids, t)
+		}
 	}
 }
 
@@ -107,9 +129,8 @@ func AddFromMount(netns NsMap) {
 	}
 }
 
-func PrintNs(netns NsMap) {
+func PrintNs(netns NsMap, all bool) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 0, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(w, "NS NUMBER \t FILE \t PIDS")
 
 	// Sort by namespace
 	nsList := []string{}
@@ -118,14 +139,35 @@ func PrintNs(netns NsMap) {
 	}
 	sort.Strings(nsList)
 
+	if all {
+		fmt.Fprintln(w, "NS NUMBER \t FILE \t PID")
+	} else {
+		fmt.Fprintln(w, "NS NUMBER \t FILE \t PID \t CMD")
+	}
 	for _, ns := range nsList {
-		pidsJoined := strings.Join(netns.Map[ns].pids, ",")
-		fmt.Fprintln(w, ns, "\t", netns.Map[ns].file, "\t", pidsJoined)
+		if all {
+			pidsJoined := strings.Join(netns.Map[ns].pids, ",")
+			fmt.Fprintln(w, ns, "\t", netns.Map[ns].file, "\t", pidsJoined)
+			continue
+		}
+
+		var pid, cmd string
+		if len(netns.Map[ns].pids) > 0 {
+			pid = netns.Map[ns].pids[0]
+			data, _ := ioutil.ReadFile(filepath.Join("/proc", pid, "comm"))
+			cmd = strings.TrimSuffix(string(data), "\n")
+		}
+		fmt.Fprintln(w, ns, "\t", netns.Map[ns].file, "\t", pid, "\t", cmd)
 	}
 	w.Flush()
 }
 
 func JoinNs(netns NsMap, target string) {
+	// need to ensure that we don't run in another Linux thread:
+	// if we change namespace by setns, all the other threads will continue to be in the old one
+	// If Go scheduler changes this goroutine to run in a different thread, we will be surprised.
+	runtime.LockOSThread()
+
 	ns, ok := netns.Map[target]
 	if !ok {
 		log.Fatalf("Namespace %s not found\n", target)
@@ -152,20 +194,24 @@ func JoinNs(netns NsMap, target string) {
 }
 
 func main() {
-	runtime.LockOSThread()
+	// If we run external command:
+	join := flag.String("j", "", "Join namespace number specified, followed by command to run")
+	all := flag.Bool("a", false, "Show all associated PIDs")
+	flag.Parse()
+
 	ps := processes()
 
 	netns := NsMap{Map: make(map[string]*NsData)}
 	AddFromPids(ps, netns)
 	AddFromMount(netns)
 
-	// If we run external command:
-	joinPtr := flag.String("j", "", "Join namespace number")
-	flag.Parse()
-
-	if *joinPtr == "" {
-		PrintNs(netns)
+	if *join == "" {
+		PrintNs(netns, *all)
 	} else {
-		JoinNs(netns, *joinPtr)
+		if len(flag.Args()) == 0 {
+			flag.Usage()
+			os.Exit(2)
+		}
+		JoinNs(netns, *join)
 	}
 }

@@ -8,19 +8,19 @@ Make sure that you have read access to all /proc/\<pid\>/ directories. Otherwise
 ```bash
 go build nsexplore.go
 # or download binary from github:
-wget https://github.com/mihgen/nsexplore/releases/download/v0.2/nsexplore
+wget https://github.com/mihgen/nsexplore/releases/download/v0.3/nsexplore
 chmod +x nsexplore
 ```
 
 ```bash
 # List all network namespaces, and pids associated.
-./nsexplore
+./nsexplore -a
 ```
 
 Example output:
 ```bash
- NS NUMBER               FILE  PIDS
-4026531957  /proc/1272/ns/net  8053,8077,10776,11790
+ NS NUMBER               FILE  PID
+4026531957  /proc/8053/ns/net  8053,8077,10776,11790
 4026532152    /run/netns/myns
 ```
 
@@ -42,8 +42,8 @@ If a process is running withing a Docker container, it takes a couple of steps t
 1. Get process pid
 ```bash
 ./nsexplore
-...
-4026532647  13240,13486
+ NS NUMBER                FILE    PID  CMD
+4026532647  /proc/13240/ns/net  13240  pause
 ```
 
 2. Get PPID of process you are interested in
